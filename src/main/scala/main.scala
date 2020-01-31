@@ -1,5 +1,6 @@
 package main
 
+import scala.io.Source
 import akka.actor.typed.ActorSystem
 import akka.actor.typed.Behavior
 import akka.actor.typed.ActorRef
@@ -22,13 +23,17 @@ object TensionReader {
 
 class TensionReader(context: ActorContext[TensionReader.Command]) extends AbstractBehavior[TensionReader.Command](context) {
   import TensionReader._
+  val iterator = Source.fromResource("tension.data").getLines()
 
   def onMessage(msg: Command): Behavior[Command] = 
     msg match {
-      case ReadTension(replyTo) => 
-        // TODO: Need to add actual reading here
-        replyTo ! RespondTension(Some(5.0), this.context.self)
-        this
+      case ReadTension(replyTo) =>
+        if (iterator.hasNext) {
+          replyTo ! RespondTension(Some(iterator.next().toDouble), this.context.self)
+          this
+        } else {
+          Behaviors.stopped
+        }
       case _ => Behaviors.unhandled
     }
 }
@@ -40,7 +45,6 @@ object LuxReader {
   case class ReadLux(replyTo: ActorRef[RespondLux]) extends Command
   case class RespondLux(value: Option[Double], from: ActorRef[ReadLux]) extends Data
 
-
   def apply(): Behavior[Command] = {
     Behaviors.setup(context => new LuxReader(context))
   }
@@ -48,13 +52,17 @@ object LuxReader {
 
 class LuxReader(context: ActorContext[LuxReader.Command]) extends AbstractBehavior[LuxReader.Command](context) {
   import LuxReader._
+  val iterator = Source.fromResource("lux.data").getLines()
 
   def onMessage(msg: Command): Behavior[Command] = {
     msg match {
-      case ReadLux(replyTo) => 
-        // TODO: Need to add actual reading here
-        replyTo ! RespondLux(Some(4.0), this.context.self)
-        this
+      case ReadLux(replyTo) =>
+        if (iterator.hasNext) {
+          replyTo ! RespondLux(Some(iterator.next().toDouble), this.context.self)
+          this
+        } else {
+          Behaviors.stopped
+        }
       case _ => Behaviors.unhandled
     }
   }
@@ -76,11 +84,11 @@ class DataAggregator(context: ActorContext[Data]) extends AbstractBehavior[Data]
     msg match {
       case RespondLux(value, replyTo) => 
         replyTo ! ReadLux(this.context.self)
-        println(value.toString)
+        context.log.info(value.toString)
         this
       case RespondTension(value, replyTo) =>
         replyTo ! ReadTension(this.context.self)
-        println(value.toString)
+        context.log.info(value.toString)
         this
     }
   }
