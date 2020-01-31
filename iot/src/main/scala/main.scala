@@ -84,11 +84,11 @@ class DataAggregator(context: ActorContext[Data]) extends AbstractBehavior[Data]
     msg match {
       case RespondLux(value, replyTo) => 
         replyTo ! ReadLux(this.context.self)
-        context.log.info(value.toString)
+        context.log.info("lux " + value.toString)
         this
       case RespondTension(value, replyTo) =>
         replyTo ! ReadTension(this.context.self)
-        context.log.info(value.toString)
+        context.log.info("kPa " + value.toString)
         this
     }
   }
