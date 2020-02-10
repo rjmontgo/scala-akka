@@ -15,22 +15,43 @@ import akka.stream.ActorMaterializer
 import akka.actor.typed.DispatcherSelector
 
 import scala.io.StdIn
+import scala.io.Source
 import scala.util.Random
 import scala.util.{Try, Success, Failure}
 import scala.concurrent._
 import scala.concurrent.duration._
+
 
 object Reader {
 
   sealed trait Read
   case class ReadNumber(replyTo: ActorRef[String]) extends Read
 
-  def apply(): Behavior[Read] =
-    Behaviors.setup(context => new Reader(context))
+  def apply(file: String, port: Int): Behavior[Read] =
+    Behaviors.setup(context => new Reader(context, file, port))
 }
 
-class Reader(context: ActorContext[Reader.Read]) extends AbstractBehavior[Reader.Read](context) {
+class Reader(context: ActorContext[Reader.Read], file: String, port: Int) extends AbstractBehavior[Reader.Read](context) {
   import Reader._
+  import akka.util.Timeout
+
+  implicit val actorSystem = context.system.toClassic
+  implicit val materializer = ActorMaterializer()
+  implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
+
+  implicit val timeout: Timeout = 3.seconds
+  implicit val scheduler = context.system.scheduler
+
+  val lineIterator = Source.fromResource(file).getLines()
+
+  val route =
+      concat(path("read") {
+        get {
+          complete(HttpEntity(ContentTypes.`application/json`, file + " " + getNextLine(lineIterator).getOrElse("Done")))
+        }
+      })
+
+  val bindingFuture = Http().bindAndHandle(route, "localhost", port)
 
   def onMessage(msg: Read): Behavior[Read] = {
     msg match {
@@ -40,6 +61,14 @@ class Reader(context: ActorContext[Reader.Read]) extends AbstractBehavior[Reader
     }
     this
   }
+
+  def getNextLine(lineItr: Iterator[String]): Option[String] = {
+    if (lineIterator.hasNext)
+      Some(lineIterator.next)
+    else 
+      None
+  }
+
 }
 
 
@@ -50,52 +79,51 @@ object AkkaHttpMain {
 
 class AkkaHttpMain(context: ActorContext[String]) extends AbstractBehavior[String](context) {
   import Reader._
+  import akka.http.scaladsl.unmarshalling.Unmarshal
 
   implicit val actorSystem = context.system.toClassic
   implicit val materializer = ActorMaterializer()
   implicit val ec: scala.concurrent.ExecutionContext = scala.concurrent.ExecutionContext.global
 
-
-  import akka.util.Timeout
-  
-
-  // asking someone requires a timeout if the timeout hits without response
-  // the ask is failed with a TimeoutException
-  implicit val timeout: Timeout = 3.seconds
-  implicit val scheduler = context.system.scheduler
-
-  val randomNumber = context.spawn(Reader(), "read-data")
-
-  val route =
-      concat(path("hello") {
-        get {
-          // randomNumber ! ReadNumber(this.context.self)
-          val result: Future[String] = randomNumber.ask(ref => ReadNumber(ref))
-
-          //complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Say hello to akka-http</h1>"))
-          onComplete(result) {
-            case Success(s) => complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>" + s + "</h1>"))
-            case Failure(f) => complete(HttpEntity(ContentTypes.`text/html(UTF-8)`, "<h1>Fail</h1>"))
-          }
-        }
-      })
-
-  val bindingFuture = Http().bindAndHandle(route, "localhost", 54321)
+  val luxReader = context.spawn(Reader("lux.data", 54322), "read-data")
+  val tensionReader = context.spawn(Reader("tension.data", 54321), "tension-data")
 
   def onMessage(msg: String) = {
     context.log.info(msg)
     this
   }
+  
+  loopRequest("http://localhost:54322/read")
+  loopRequest("http://localhost:54321/read")
 
-
-  StdIn.readLine() // let it run until user presses return
-    bindingFuture
-      .flatMap(_.unbind()) // trigger unbinding from the port
-      .onComplete(_ => context.system.terminate()) // and shutdown when done
+  def loopRequest(uri: String): Unit = {
+    Http().singleRequest(HttpRequest(uri = uri)).onComplete(tri => tri match {
+      case Success(res) => {
+          Unmarshal(res.entity)
+            .to[String]
+            .onComplete(tryStr => 
+              tryStr.fold(fail => context.log.info(fail.toString), 
+                pass => {
+                  val split = pass.split(" ")
+                  if (split(1) != "Done") {
+                    context.log.info(pass)
+                    loopRequest(uri)
+                  }
+                }))
+        }
+        
+      case Failure(_)   => sys.error("something wrong")
+    })
+  }
 }
 
 object AkkaHttp extends App {
 
   implicit val actorSystem = ActorSystem(AkkaHttpMain(), "http-system")
 
+  try {
+    StdIn.readLine()
+  } finally {
+    actorSystem.terminate()
+  }
 }
