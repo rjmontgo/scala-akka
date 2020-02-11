@@ -24,6 +24,8 @@ import scala.concurrent.duration._
 
 object Reader {
 
+  // put routes in here
+  // become()
   sealed trait Read
   case class ReadNumber(replyTo: ActorRef[String]) extends Read
 
@@ -44,6 +46,9 @@ class Reader(context: ActorContext[Reader.Read], file: String, port: Int) extend
 
   val lineIterator = Source.fromResource(file).getLines()
 
+  // val routes = FooRouter.route ~ BarRouter.route
+
+  // separate routes --> put in companion object for example
   val route =
       concat(path("read") {
         get {
@@ -62,6 +67,10 @@ class Reader(context: ActorContext[Reader.Read], file: String, port: Int) extend
     this
   }
 
+  // take(1)
+  // .iterator.next()
+
+  // wrap ZIO task
   def getNextLine(lineItr: Iterator[String]): Option[String] = {
     if (lineIterator.hasNext)
       Some(lineIterator.next)
